@@ -1,5 +1,11 @@
 from flask import Flask, request, jsonify, render_template, Response
-from prometheus_client import Counter, Histogram, Gauge, generate_latest, CONTENT_TYPE_LATEST
+from prometheus_client import (
+    Counter,
+    Histogram,
+    Gauge,
+    generate_latest,
+    CONTENT_TYPE_LATEST,
+)
 from functools import lru_cache
 from time import time
 import numpy as np
@@ -16,30 +22,32 @@ app = Flask(__name__)
 # ─────────────────────────────────────────
 # PATHS  (all absolute, anchored to app.py)
 # ─────────────────────────────────────────
-BASE_DIR   = os.path.dirname(os.path.abspath(__file__))
-ROOT_DIR   = os.path.abspath(os.path.join(BASE_DIR, ".."))
-MODEL_PATH  = os.path.join(ROOT_DIR, "models", "fraud_model.pkl")
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+ROOT_DIR = os.path.abspath(os.path.join(BASE_DIR, ".."))
+MODEL_PATH = os.path.join(ROOT_DIR, "models", "fraud_model.pkl")
 SCALER_PATH = os.path.join(ROOT_DIR, "models", "scaler.pkl")
-CSV_PATH    = os.path.join(ROOT_DIR, "creditcard.csv")
-DB_PATH     = os.path.join(ROOT_DIR, "data", "transactions.db")
+CSV_PATH = os.getenv("CSV_PATH", "/app/data/creditcard.csv")
+DB_PATH = os.path.join(ROOT_DIR, "data", "transactions.db")
 
 # ─────────────────────────────────────────
 # PROMETHEUS METRICS
 # ─────────────────────────────────────────
-request_counter    = Counter("api_requests_total",        "Total API Requests",   ["endpoint"])
-error_counter      = Counter("api_errors_total",          "Total API Errors",     ["endpoint"])
-request_latency    = Histogram("api_request_latency_seconds", "Request latency",  ["endpoint"])
-prediction_counter = Counter("api_predictions_total",     "Total predictions",    ["result"])
-fraud_amount_total = Counter("fraud_amount_total_inr",    "Total flagged amount in INR")
-legit_amount_total = Counter("legit_amount_total_inr",    "Total legitimate amount in INR")
-total_transactions = Gauge("total_transactions_stored",   "Transactions stored in DB")
-fraud_rate_gauge   = Gauge("fraud_rate_percent",          "Current fraud rate percent")
+request_counter = Counter("api_requests_total", "Total API Requests", ["endpoint"])
+error_counter = Counter("api_errors_total", "Total API Errors", ["endpoint"])
+request_latency = Histogram(
+    "api_request_latency_seconds", "Request latency", ["endpoint"]
+)
+prediction_counter = Counter("api_predictions_total", "Total predictions", ["result"])
+fraud_amount_total = Counter("fraud_amount_total_inr", "Total flagged amount in INR")
+legit_amount_total = Counter("legit_amount_total_inr", "Total legitimate amount in INR")
+total_transactions = Gauge("total_transactions_stored", "Transactions stored in DB")
+fraud_rate_gauge = Gauge("fraud_rate_percent", "Current fraud rate percent")
 
 # ─────────────────────────────────────────
 # GLOBALS
 # ─────────────────────────────────────────
-model            = None
-scaler           = None
+model = None
+scaler = None
 credit_card_data = None
 
 
@@ -50,7 +58,8 @@ def init_db():
     """Create transactions table if it doesn't exist."""
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
     conn = sqlite3.connect(DB_PATH)
-    conn.execute("""
+    conn.execute(
+        """
         CREATE TABLE IF NOT EXISTS transactions (
             id          INTEGER PRIMARY KEY AUTOINCREMENT,
             timestamp   TEXT    NOT NULL,
@@ -60,7 +69,8 @@ def init_db():
             risk_level  TEXT    NOT NULL,
             latency_ms  REAL    NOT NULL
         )
-    """)
+    """
+    )
     conn.commit()
     conn.close()
     print("✅ Database initialised at", DB_PATH)
@@ -72,8 +82,14 @@ def save_transaction(amount, prediction, probability, risk_level, latency_ms):
     conn.execute(
         "INSERT INTO transactions (timestamp, amount, prediction, probability, risk_level, latency_ms) "
         "VALUES (?, ?, ?, ?, ?, ?)",
-        (datetime.utcnow().isoformat(), amount, int(prediction),
-         float(probability), risk_level, float(latency_ms))
+        (
+            datetime.utcnow().isoformat(),
+            amount,
+            int(prediction),
+            float(probability),
+            risk_level,
+            float(latency_ms),
+        ),
     )
     conn.commit()
     conn.close()
@@ -93,7 +109,8 @@ def get_recent_transactions(limit=50):
 def get_stats():
     """Aggregate stats used by /api/stats and Prometheus gauge refresh."""
     conn = sqlite3.connect(DB_PATH)
-    row = conn.execute("""
+    row = conn.execute(
+        """
         SELECT
             COUNT(*)                                AS total,
             SUM(CASE WHEN prediction=1 THEN 1 ELSE 0 END) AS frauds,
@@ -102,19 +119,20 @@ def get_stats():
             SUM(amount)                             AS total_amount,
             SUM(CASE WHEN prediction=1 THEN amount ELSE 0 END) AS fraud_amount
         FROM transactions
-    """).fetchone()
+    """
+    ).fetchone()
     conn.close()
-    total  = row[0] or 0
+    total = row[0] or 0
     frauds = row[1] or 0
     legits = row[2] or 0
     return {
-        "total":        total,
-        "frauds":       frauds,
-        "legits":       legits,
-        "avg_latency":  round(row[3] or 0, 2),
+        "total": total,
+        "frauds": frauds,
+        "legits": legits,
+        "avg_latency": round(row[3] or 0, 2),
         "total_amount": round(row[4] or 0, 2),
         "fraud_amount": round(row[5] or 0, 2),
-        "fraud_rate":   round((frauds / total * 100) if total else 0, 2),
+        "fraud_rate": round((frauds / total * 100) if total else 0, 2),
     }
 
 
@@ -123,14 +141,36 @@ def get_stats():
 # ─────────────────────────────────────────
 SEED_AMOUNTS = [
     # (amount, force_fraud)
-    (500, False), (1200, False), (3500, False), (750, False),
-    (8900, False), (2300, False), (450, False), (15000, False),
-    (99000, True), (6700, False), (250, False), (5500, False),
-    (180000, True), (320, False), (4400, False), (11000, False),
-    (75000, True), (900, False), (2100, False), (3300, False),
-    (560000, True), (8200, False), (1750, False), (6100, False),
-    (42000, False), (290000, True), (670, False), (4800, False),
+    (500, False),
+    (1200, False),
+    (3500, False),
+    (750, False),
+    (8900, False),
+    (2300, False),
+    (450, False),
+    (15000, False),
+    (99000, True),
+    (6700, False),
+    (250, False),
+    (5500, False),
+    (180000, True),
+    (320, False),
+    (4400, False),
+    (11000, False),
+    (75000, True),
+    (900, False),
+    (2100, False),
+    (3300, False),
+    (560000, True),
+    (8200, False),
+    (1750, False),
+    (6100, False),
+    (42000, False),
+    (290000, True),
+    (670, False),
+    (4800, False),
 ]
+
 
 def seed_demo_data():
     """Insert realistic demo transactions so the dashboard isn't empty on first run."""
@@ -166,7 +206,7 @@ def seed_demo_data():
             conn.execute(
                 "INSERT INTO transactions (timestamp, amount, prediction, probability, risk_level, latency_ms) "
                 "VALUES (?, ?, ?, ?, ?, ?)",
-                (ts, amount, int(pred), float(prob), risk, latency)
+                (ts, amount, int(pred), float(prob), risk, latency),
             )
             conn.commit()
             conn.close()
@@ -185,7 +225,7 @@ def load_model():
     print("   model path:", MODEL_PATH, "| exists:", os.path.exists(MODEL_PATH))
     print("   scaler path:", SCALER_PATH, "| exists:", os.path.exists(SCALER_PATH))
     try:
-        model  = joblib.load(MODEL_PATH)
+        model = joblib.load(MODEL_PATH)
         scaler = joblib.load(SCALER_PATH)
         if not hasattr(model, "predict"):
             raise RuntimeError("Loaded object has no predict() — corrupted pkl")
@@ -237,7 +277,7 @@ def get_closest_real_features(amount):
 
 def generate_real_features(amount):
     features = get_closest_real_features(amount)
-    features[-1] = amount   # replace Amount with user value; V1-V28 stay real
+    features[-1] = amount  # replace Amount with user value; V1-V28 stay real
     return features
 
 
@@ -252,11 +292,11 @@ def predict_fraud(features):
         raise ValueError(f"Expected 30 features, got {len(features)}")
 
     cols = ["Time"] + [f"V{i}" for i in range(1, 29)] + ["Amount"]
-    df   = pd.DataFrame([features], columns=cols)
+    df = pd.DataFrame([features], columns=cols)
 
-    scaled     = scaler.transform(df)          # DataFrame → no feature-name warning
+    scaled = scaler.transform(df)  # DataFrame → no feature-name warning
     prediction = model.predict(scaled)[0]
-    probability= model.predict_proba(scaled)[0][1]
+    probability = model.predict_proba(scaled)[0][1]
     return prediction, probability
 
 
@@ -306,11 +346,16 @@ def predict_api():
             return jsonify({"success": False, "error": "Amount must be > 0"}), 400
         if amount > 10_000_000:
             error_counter.labels(endpoint="/api/predict").inc()
-            return jsonify({"success": False, "error": "Amount too high (max ₹1,00,00,000)"}), 400
+            return (
+                jsonify(
+                    {"success": False, "error": "Amount too high (max ₹1,00,00,000)"}
+                ),
+                400,
+            )
 
-        features             = generate_real_features(amount)
+        features = generate_real_features(amount)
         prediction, probability = predict_fraud(features)
-        latency_ms           = round((time() - start_time) * 1000, 2)
+        latency_ms = round((time() - start_time) * 1000, 2)
 
         # Prometheus
         label = "fraud" if prediction == 1 else "legit"
@@ -322,20 +367,20 @@ def predict_api():
 
         # Risk metadata
         if probability > 0.7:
-            risk_level      = "HIGH"
-            risk_color      = "#ff4d4f"
-            risk_emoji      = "🔴"
-            recommendation  = "BLOCK TRANSACTION — Immediate verification required"
+            risk_level = "HIGH"
+            risk_color = "#ff4d4f"
+            risk_emoji = "🔴"
+            recommendation = "BLOCK TRANSACTION — Immediate verification required"
         elif probability > 0.3:
-            risk_level      = "MEDIUM"
-            risk_color      = "#faad14"
-            risk_emoji      = "🟡"
-            recommendation  = "REVIEW — Additional verification recommended"
+            risk_level = "MEDIUM"
+            risk_color = "#faad14"
+            risk_emoji = "🟡"
+            recommendation = "REVIEW — Additional verification recommended"
         else:
-            risk_level      = "LOW"
-            risk_color      = "#52c41a"
-            risk_emoji      = "🟢"
-            recommendation  = "APPROVE — Transaction appears legitimate"
+            risk_level = "LOW"
+            risk_color = "#52c41a"
+            risk_emoji = "🟢"
+            recommendation = "APPROVE — Transaction appears legitimate"
 
         # ✅ Persist to SQLite
         save_transaction(amount, prediction, probability, risk_level, latency_ms)
@@ -345,16 +390,18 @@ def predict_api():
         total_transactions.set(_s["total"])
         fraud_rate_gauge.set(_s["fraud_rate"])
 
-        return jsonify({
-            "success":          True,
-            "prediction":       int(prediction),
-            "fraud_probability":float(probability),
-            "risk_level":       risk_level,
-            "risk_color":       risk_color,
-            "risk_emoji":       risk_emoji,
-            "recommendation":   recommendation,
-            "latency_ms":       latency_ms,
-        })
+        return jsonify(
+            {
+                "success": True,
+                "prediction": int(prediction),
+                "fraud_probability": float(probability),
+                "risk_level": risk_level,
+                "risk_color": risk_color,
+                "risk_emoji": risk_emoji,
+                "recommendation": recommendation,
+                "latency_ms": latency_ms,
+            }
+        )
 
     except Exception as e:
         error_counter.labels(endpoint="/api/predict").inc()
@@ -369,7 +416,7 @@ def api_transactions():
     """Return the last N persisted transactions for the dashboard history panel."""
     request_counter.labels(endpoint="/api/transactions").inc()
     limit = min(int(request.args.get("limit", 50)), 200)
-    rows  = get_recent_transactions(limit)
+    rows = get_recent_transactions(limit)
     return jsonify({"success": True, "transactions": rows, "count": len(rows)})
 
 
@@ -383,13 +430,15 @@ def api_stats():
 @app.route("/health")
 def health():
     request_counter.labels(endpoint="/health").inc()
-    return jsonify({
-        "status":         "healthy",
-        "service":        "fraud-detection-api",
-        "model_loaded":   model  is not None,
-        "scaler_loaded":  scaler is not None,
-        "dataset_loaded": credit_card_data is not None,
-    })
+    return jsonify(
+        {
+            "status": "healthy",
+            "service": "fraud-detection-api",
+            "model_loaded": model is not None,
+            "scaler_loaded": scaler is not None,
+            "dataset_loaded": credit_card_data is not None,
+        }
+    )
 
 
 @app.route("/metrics")
@@ -400,15 +449,17 @@ def metrics():
 @app.route("/api/info")
 def api_info():
     request_counter.labels(endpoint="/api/info").inc()
-    return jsonify({
-        "name":            "Fraud Detection API",
-        "version":         "3.1.0",
-        "model_type":      "Logistic Regression",
-        "features":        30,
-        "feature_order":   ["Time"] + [f"V{i}" for i in range(1, 29)] + ["Amount"],
-        "persistence":     "SQLite (survives container restarts)",
-        "data_source":     "Real creditcard.csv — no synthetic manipulation",
-    })
+    return jsonify(
+        {
+            "name": "Fraud Detection API",
+            "version": "3.1.0",
+            "model_type": "Logistic Regression",
+            "features": 30,
+            "feature_order": ["Time"] + [f"V{i}" for i in range(1, 29)] + ["Amount"],
+            "persistence": "SQLite (survives container restarts)",
+            "data_source": "Real creditcard.csv — no synthetic manipulation",
+        }
+    )
 
 
 # ─────────────────────────────────────────
