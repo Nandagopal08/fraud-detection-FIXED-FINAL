@@ -20,12 +20,14 @@ RUN pip install --no-cache-dir --timeout 300 --retries 5 "numpy>=1.24,<2.0"
 RUN pip install --no-cache-dir --timeout 300 --retries 5 "pandas>=2.0,<3.0"
 RUN pip install --no-cache-dir --timeout 300 --retries 5 "scikit-learn>=1.3,<2.0"
 
-RUN pip install --no-cache-dir --timeout 300 --retries 5 
-flask==2.3.3 
-werkzeug==2.3.7 
-prometheus_client 
-joblib
-
+RUN pip install --no-cache-dir --timeout 300 --retries 5 \
+    "numpy>=1.24,<2.0" \
+    "pandas>=2.0,<3.0" \
+    "scikit-learn>=1.3,<2.0" \
+    flask==2.3.3 \
+    werkzeug==2.3.7 \
+    prometheus_client \
+    joblib
 # Copy all project files
 
 COPY . .
