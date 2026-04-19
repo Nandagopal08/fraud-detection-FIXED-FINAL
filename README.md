@@ -1,7 +1,7 @@
 # Fraud Detection — Cloud Docker Application
 ### Based on: Kim et al. 2022 — *"Design and Implementation of Cloud Docker Application Architecture Based on Machine Learning in Container Management for Smart Manufacturing"*
 
-**Teacher's changes applied:**
+
 - ML model → Logistic Regression trained on Bank Fraud (creditcard.csv)
 - Monitoring → Prometheus + Grafana (replaces paper's DataDog)
 - Added cAdvisor for container CPU/memory metrics (matches paper Figures 14–16)
@@ -46,12 +46,10 @@
 
 ---
 
-## Option A — Local Deployment (Fastest)
+##  — Local Deployment 
 
 ```bash
-# 1. Download creditcard.csv from Kaggle and place in project root
-
-# 2. Run one-command deployment
+ Run one-command deployment
 bash scripts/deploy-local.sh          # Mac/Linux
 # OR
 deploy-local.bat                      # Windows CMD/PowerShell
