@@ -8,7 +8,7 @@ from sklearn.preprocessing import StandardScaler
 print("🚀 Training model...")
 
 # Load dataset
-data = pd.read_csv("creditcard.csv")
+data = pd.read_csv("data/creditcard.csv")
 
 print("Dataset loaded:", data.shape)
 
