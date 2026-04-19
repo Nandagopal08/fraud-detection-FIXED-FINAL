@@ -1,0 +1,14 @@
+# Jenkins plugins required for the fraud-detection pipeline
+# Install via: Jenkins > Manage Jenkins > Plugins > Available
+
+git
+github
+workflow-aggregator
+pipeline-stage-view
+docker-workflow
+docker-commons
+credentials-binding
+blueocean
+timestamper
+ws-cleanup
+ansicolor

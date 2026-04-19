@@ -1,0 +1,26 @@
+# prometheus.yml
+# Mirrors paper Section 3.3 / Figure 3: DataDog replaced by Prometheus+Grafana
+# Scrapes fraud-api /metrics endpoint (Prometheus client built into Flask app)
+
+global:
+  scrape_interval: 5s       # Paper uses real-time anomaly detection - fast scrape
+  evaluation_interval: 5s
+
+scrape_configs:
+  # Main fraud detection API - matches paper's ML container metrics
+  - job_name: 'fraud-api'
+    static_configs:
+      - targets: ['fraud-api:5000']
+    metrics_path: '/metrics'
+    scrape_timeout: 4s
+
+  # Prometheus self-monitoring
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+
+  # Docker container metrics via cAdvisor (paper Section 4.4: CPU/memory monitoring)
+  - job_name: 'cadvisor'
+    static_configs:
+      - targets: ['cadvisor:8080']
+    scrape_timeout: 4s

@@ -1,0 +1,33 @@
+# jenkins/docker-compose.jenkins.yml — WINDOWS/WSL2 FIXED
+#
+# Two fixes applied for Windows:
+#  1. /usr/bin/docker does not exist in WSL2 — removed that volume mount
+#     Jenkins finds Docker via the socket instead (user: root + socket mount)
+#  2. Increased memory to 768m — Jenkins on WSL2 with JDK17 needs more RAM
+#     to write the initialAdminPassword file within a reasonable time
+
+services:
+  jenkins:
+    image: jenkins/jenkins:lts-jdk17
+    container_name: jenkins
+    user: root
+    ports:
+      - "8080:8080"
+      - "50000:50000"
+    volumes:
+      - jenkins_home:/var/jenkins_home
+      - /var/run/docker.sock:/var/run/docker.sock
+      # NOTE: /usr/bin/docker mount REMOVED — it does not exist in WSL2.
+      # Jenkins uses the Docker socket directly instead.
+    environment:
+      - JAVA_OPTS=-Xmx768m -Xms256m
+    restart: unless-stopped
+    networks:
+      - monitoring
+
+networks:
+  monitoring:
+    external: true
+
+volumes:
+  jenkins_home:

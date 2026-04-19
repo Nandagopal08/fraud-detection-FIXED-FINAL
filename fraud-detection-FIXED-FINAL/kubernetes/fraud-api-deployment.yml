@@ -1,0 +1,69 @@
+# kubernetes/fraud-api-deployment.yml
+# Paper Section 3.3: ML Application Container deployed in Kubernetes
+# Uses pre-built image from Docker Hub (pushed by Jenkins pipeline)
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fraud-api
+  namespace: fraud-detection
+  labels:
+    app: fraud-api
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: fraud-api
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app: fraud-api
+      annotations:
+        # Prometheus auto-discovery annotations
+        prometheus.io/scrape: "true"
+        prometheus.io/path: "/metrics"
+        prometheus.io/port: "5000"
+    spec:
+      containers:
+        - name: fraud-api
+          image: ameyab16/fraud-api:latest   # ← change to your DockerHub user
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 5000
+          # Paper Table 2: T2.medium = 2 vCPU, 4GB RAM - set conservative k8s limits
+          resources:
+            requests:
+              memory: "512Mi"
+              cpu: "250m"
+            limits:
+              memory: "1Gi"
+              cpu: "500m"
+          # Liveness: restart if app crashes (paper: "prevent failures")
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 5000
+            initialDelaySeconds: 60
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 3
+          # Readiness: don't route traffic until model is loaded
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 5000
+            initialDelaySeconds: 60
+            periodSeconds: 15
+            timeoutSeconds: 10
+            failureThreshold: 3
+          volumeMounts:
+            - name: fraud-data
+              mountPath: /app/data
+      volumes:
+        - name: fraud-data
+          emptyDir: {}

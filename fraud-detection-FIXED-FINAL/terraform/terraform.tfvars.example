@@ -1,0 +1,21 @@
+# terraform/terraform.tfvars.example
+# Copy this to terraform.tfvars and fill in your values.
+# DO NOT commit terraform.tfvars to git (it's in .gitignore).
+
+# ── Required ───────────────────────────────────────────────────────
+# Name of an existing AWS Key Pair (create in AWS Console → EC2 → Key Pairs)
+key_pair_name = "your-keypair-name"
+
+# ── Optional (defaults match paper Table 2) ────────────────────────
+# AWS region — paper uses ap-northeast-2 (Seoul)
+aws_region    = "ap-northeast-2"
+
+# EC2 instance type — paper Table 2: T2.medium (2 vCPU, 4GB RAM)
+instance_type = "t2.medium"
+
+# Restrict SSH to your IP only (safer than 0.0.0.0/0)
+# Find your IP: curl ifconfig.me
+allowed_ssh_cidr = "0.0.0.0/0"
+
+# Environment label
+environment = "production"

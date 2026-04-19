@@ -1,0 +1,290 @@
+---
+# ansible/site.yml
+# Provisions the EC2 instance and deploys the full fraud-detection stack.
+# Mirrors paper Figure 3: Docker + Jenkins + Portainer + Prometheus + Grafana
+# Run AFTER terraform apply (get IP from: terraform -chdir=terraform output public_ip)
+
+- name: Provision Fraud Detection Server
+  hosts: fraud_detection_servers
+  become: true
+  vars:
+    project_dir: /home/ec2-user/fraud-detection
+    dockerhub_user: "{{ lookup('env', 'DOCKERHUB_USER') | default('ameyab16') }}"
+
+  tasks:
+
+    # ── 1. System packages ─────────────────────────────────────────
+    - name: Update all packages
+      yum:
+        name: "*"
+        state: latest
+      tags: packages
+
+    - name: Install base packages
+      yum:
+        name:
+          - git
+          - curl
+          - wget
+          - unzip
+          - python3
+          - python3-pip
+          - java-17-amazon-corretto
+        state: present
+      tags: packages
+
+    # ── 2. Docker ──────────────────────────────────────────────────
+    - name: Install Docker
+      yum:
+        name: docker
+        state: present
+      tags: docker
+
+    - name: Start and enable Docker
+      systemd:
+        name: docker
+        state: started
+        enabled: yes
+      tags: docker
+
+    - name: Add ec2-user to docker group
+      user:
+        name: ec2-user
+        groups: docker
+        append: yes
+      tags: docker
+
+    - name: Install Docker Compose v2 plugin
+      shell: |
+        mkdir -p /usr/local/lib/docker/cli-plugins
+        curl -SL https://github.com/docker/compose/releases/latest/download/docker-compose-linux-x86_64 \
+          -o /usr/local/lib/docker/cli-plugins/docker-compose
+        chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
+      args:
+        creates: /usr/local/lib/docker/cli-plugins/docker-compose
+      tags: docker
+
+    - name: Verify Docker Compose
+      command: docker compose version
+      register: compose_version
+      changed_when: false
+
+    - name: Show Docker Compose version
+      debug:
+        msg: "{{ compose_version.stdout }}"
+
+    # ── 3. daemon.json for DNS (fixes build-time pip download issues) ─
+    - name: Configure Docker DNS
+      copy:
+        dest: /etc/docker/daemon.json
+        content: |
+          {
+            "dns": ["8.8.8.8", "8.8.4.4"],
+            "dns-search": [],
+            "dns-opts": ["timeout:5", "attempts:3"]
+          }
+      notify: restart docker
+      tags: docker
+
+    # ── 4. Jenkins ─────────────────────────────────────────────────
+    - name: Add Jenkins repo
+      get_url:
+        url: https://pkg.jenkins.io/redhat-stable/jenkins.repo
+        dest: /etc/yum.repos.d/jenkins.repo
+      tags: jenkins
+
+    - name: Import Jenkins GPG key
+      rpm_key:
+        key: https://pkg.jenkins.io/redhat-stable/jenkins.io-2023.key
+        state: present
+      tags: jenkins
+
+    - name: Install Jenkins
+      yum:
+        name: jenkins
+        state: present
+      tags: jenkins
+
+    - name: Start and enable Jenkins
+      systemd:
+        name: jenkins
+        state: started
+        enabled: yes
+      tags: jenkins
+
+    - name: Add jenkins user to docker group (so Jenkins can run docker builds)
+      user:
+        name: jenkins
+        groups: docker
+        append: yes
+      tags: jenkins
+
+    - name: Restart Jenkins after docker group change
+      systemd:
+        name: jenkins
+        state: restarted
+      tags: jenkins
+
+    # ── 5. Minikube (Kubernetes) ────────────────────────────────────
+    - name: Download kubectl
+      get_url:
+        url: https://dl.k8s.io/release/v1.29.0/bin/linux/amd64/kubectl
+        dest: /usr/local/bin/kubectl
+        mode: '0755'
+      tags: kubernetes
+
+    - name: Download Minikube
+      get_url:
+        url: https://storage.googleapis.com/minikube/releases/latest/minikube-linux-amd64
+        dest: /usr/local/bin/minikube
+        mode: '0755'
+      tags: kubernetes
+
+    - name: Start Minikube with Docker driver (as ec2-user)
+      become_user: ec2-user
+      shell: |
+        minikube start --driver=docker --cpus=2 --memory=2048 \
+          --kubernetes-version=v1.29.0
+      args:
+        creates: /home/ec2-user/.minikube/profiles/minikube/config.json
+      tags: kubernetes
+
+    - name: Enable Minikube ingress addon
+      become_user: ec2-user
+      shell: minikube addons enable ingress
+      ignore_errors: yes
+      tags: kubernetes
+
+    # ── 6. Project code ────────────────────────────────────────────
+    - name: Create project directory
+      file:
+        path: "{{ project_dir }}"
+        state: directory
+        owner: ec2-user
+        group: ec2-user
+        mode: '0755'
+      tags: deploy
+
+    - name: Sync project files to server (excludes dataset and terraform state)
+      synchronize:
+        src: ../
+        dest: "{{ project_dir }}/"
+        rsync_opts:
+          - "--exclude=.git"
+          - "--exclude=__pycache__"
+          - "--exclude=*.pyc"
+          - "--exclude=creditcard.csv"
+          - "--exclude=terraform/.terraform"
+          - "--exclude=terraform/terraform.tfstate*"
+      tags: deploy
+
+    - name: Set project directory ownership
+      file:
+        path: "{{ project_dir }}"
+        owner: ec2-user
+        group: ec2-user
+        recurse: yes
+      tags: deploy
+
+    # ── 7. Upload creditcard.csv dataset ───────────────────────────
+    # Dataset is excluded from rsync; upload separately to keep repo clean
+    - name: Check if creditcard.csv exists on server
+      stat:
+        path: "{{ project_dir }}/creditcard.csv"
+      register: csv_stat
+      tags: deploy
+
+    - name: Warn if creditcard.csv is missing
+      debug:
+        msg: |
+          ⚠️  creditcard.csv NOT found at {{ project_dir }}/creditcard.csv
+          Upload manually: scp -i ~/.ssh/YOUR_KEY.pem creditcard.csv ec2-user@SERVER_IP:{{ project_dir }}/
+          Then re-run: docker compose up -d --build fraud-api
+      when: not csv_stat.stat.exists
+      tags: deploy
+
+    # ── 8. Deploy stack with Docker Compose ────────────────────────
+    - name: Pull fraud-api image from Docker Hub (if already published)
+      become_user: ec2-user
+      shell: docker pull {{ dockerhub_user }}/fraud-api:latest
+      ignore_errors: yes   # OK if image not yet pushed; will build locally
+      tags: deploy
+
+    - name: Deploy full stack (Fraud API + Prometheus + Grafana + Portainer + cAdvisor)
+      become_user: ec2-user
+      shell: |
+        cd {{ project_dir }}
+        docker compose up -d
+      environment:
+        DOCKERHUB_USER: "{{ dockerhub_user }}"
+      tags: deploy
+
+    - name: Wait for fraud-api to become healthy (model trains in Docker build, ~90s total)
+      become_user: ec2-user
+      shell: |
+        for i in $(seq 1 24); do
+          STATUS=$(curl -sf http://localhost:5000/health 2>/dev/null | \
+            python3 -c "import sys,json; print(json.load(sys.stdin)['status'])" 2>/dev/null || echo "")
+          [ "$STATUS" = "healthy" ] && echo "healthy" && exit 0
+          echo "Attempt $i/24: not ready yet..."
+          sleep 15
+        done
+        echo "TIMEOUT"
+        exit 1
+      register: health_result
+      tags: deploy
+
+    - name: Show health status
+      debug:
+        msg: "Fraud API health: {{ health_result.stdout_lines[-1] }}"
+
+    # ── 9. Jenkins: start CI container ─────────────────────────────
+    - name: Start Jenkins container
+      become_user: ec2-user
+      shell: |
+        cd {{ project_dir }}
+        docker compose -f jenkins/docker-compose.jenkins.yml up -d
+      tags: jenkins
+
+    # ── 10. Deploy Kubernetes manifests ────────────────────────────
+    - name: Deploy fraud-detection namespace and services to Kubernetes
+      become_user: ec2-user
+      shell: |
+        cd {{ project_dir }}/kubernetes
+        kubectl apply -f namespace.yml
+        kubectl apply -f fraud-api-deployment.yml
+        kubectl apply -f fraud-api-service.yml
+        kubectl apply -f prometheus-deployment.yml
+        kubectl apply -f prometheus-service.yml
+        kubectl apply -f grafana-deployment.yml
+        kubectl apply -f grafana-service.yml
+        kubectl apply -f portainer-deployment.yml
+      ignore_errors: yes
+      tags: kubernetes
+
+    # ── 11. Print Jenkins initial password ─────────────────────────
+    - name: Get Jenkins initial admin password
+      command: cat /var/lib/jenkins/secrets/initialAdminPassword
+      register: jenkins_password
+      ignore_errors: yes
+      tags: jenkins
+
+    - name: Print access URLs
+      debug:
+        msg:
+          - "============================================"
+          - "✅ DEPLOYMENT COMPLETE"
+          - "============================================"
+          - "Fraud API  : http://{{ ansible_host }}:5000"
+          - "Prometheus : http://{{ ansible_host }}:9090"
+          - "Grafana    : http://{{ ansible_host }}:3000  (admin/admin)"
+          - "Portainer  : http://{{ ansible_host }}:9000"
+          - "Jenkins    : http://{{ ansible_host }}:8080"
+          - "Jenkins PW : {{ jenkins_password.stdout | default('sudo cat /var/lib/jenkins/secrets/initialAdminPassword') }}"
+          - "============================================"
+
+  handlers:
+    - name: restart docker
+      systemd:
+        name: docker
+        state: restarted

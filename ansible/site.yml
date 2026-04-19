@@ -1,0 +1,153 @@
+- name: Provision Fraud Detection Server
+  hosts: fraud_detection_servers
+  become: true
+
+  vars:
+    project_dir: /home/ec2-user/fraud-detection
+    project_src: "{{ playbook_dir }}/.."   # ✅ FIXED PATH
+    dockerhub_user: "{{ lookup('env', 'DOCKERHUB_USER') | default('ameyab16') }}"
+
+  tasks:
+
+    # ── 1. System packages ─────────────────────────
+    - name: Update all packages
+      yum:
+        name: "*"
+        state: latest
+
+    - name: Install base packages
+      yum:
+        name:
+          - git
+          - wget
+          - unzip
+          - python3
+          - python3-pip
+          - java-17-amazon-corretto
+          - rsync
+        state: present
+
+    # ── 2. Docker ──────────────────────────────────
+    - name: Install Docker
+      yum:
+        name: docker
+        state: present
+
+    - name: Start and enable Docker
+      systemd:
+        name: docker
+        state: started
+        enabled: yes
+
+    - name: Add ec2-user to docker group
+      user:
+        name: ec2-user
+        groups: docker
+        append: yes
+
+    # ── 3. Docker Compose ─────────────────────────
+    - name: Install Docker Compose v2 plugin
+      shell: |
+        mkdir -p /usr/local/lib/docker/cli-plugins
+        curl -SL https://github.com/docker/compose/releases/latest/download/docker-compose-linux-x86_64 \
+          -o /usr/local/lib/docker/cli-plugins/docker-compose
+        chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
+      args:
+        creates: /usr/local/lib/docker/cli-plugins/docker-compose
+
+    - name: Verify Docker Compose
+      command: docker compose version
+      register: compose_version
+      changed_when: false
+
+    - debug:
+        msg: "{{ compose_version.stdout }}"
+
+    # ── 4. Docker DNS Fix ─────────────────────────
+    - name: Configure Docker DNS
+      copy:
+        dest: /etc/docker/daemon.json
+        content: |
+          {
+            "dns": ["8.8.8.8", "8.8.4.4"]
+          }
+      notify: restart docker
+
+    # ── 5. Minikube ───────────────────────────────
+    - name: Download kubectl
+      get_url:
+        url: https://dl.k8s.io/release/v1.29.0/bin/linux/amd64/kubectl
+        dest: /usr/local/bin/kubectl
+        mode: '0755'
+
+    - name: Download Minikube
+      get_url:
+        url: https://storage.googleapis.com/minikube/releases/latest/minikube-linux-amd64
+        dest: /usr/local/bin/minikube
+        mode: '0755'
+
+    - name: Start Minikube
+      become_user: ec2-user
+      shell: |
+        minikube start --driver=docker --cpus=2 --memory=2048
+      args:
+        creates: /home/ec2-user/.minikube
+
+    # ── 6. Project Setup ─────────────────────────
+    - name: Create project directory
+      file:
+        path: "{{ project_dir }}"
+        state: directory
+        owner: ec2-user
+        group: ec2-user
+
+    - name: Copy project files (FIXED)
+      synchronize:
+        src: "{{ project_src }}/"
+        dest: "{{ project_dir }}/"
+        rsync_opts:
+          - "--exclude=.git"
+          - "--exclude=__pycache__"
+          - "--exclude=*.pyc"
+          - "--exclude=creditcard.csv"
+
+    - name: Fix ownership
+      file:
+        path: "{{ project_dir }}"
+        owner: ec2-user
+        group: ec2-user
+        recurse: yes
+
+    # ── 7. Run Docker Stack ──────────────────────
+    - name: Run Docker Compose
+      become_user: ec2-user
+      shell: |
+        cd {{ project_dir }}
+        docker compose up -d
+
+    # ── 8. Run Jenkins via Docker ────────────────
+    - name: Run Jenkins container
+      become_user: ec2-user
+      shell: |
+        cd {{ project_dir }}
+        docker compose -f jenkins/docker-compose.jenkins.yml up -d
+
+    # ── 9. Show URLs ────────────────────────────
+    - name: Print URLs
+      debug:
+        msg:
+          - "================================"
+          - "DEPLOYMENT SUCCESS ✅"
+          - "================================"
+          - "Fraud API  : http://{{ ansible_host }}:5000"
+          - "Grafana    : http://{{ ansible_host }}:3000"
+          - "Prometheus : http://{{ ansible_host }}:9090"
+          - "Portainer  : http://{{ ansible_host }}:9000"
+          - "Jenkins    : http://{{ ansible_host }}:8080"
+          - "================================"
+
+  handlers:
+    - name: restart docker
+      systemd:
+        name: docker
+        state: restarted

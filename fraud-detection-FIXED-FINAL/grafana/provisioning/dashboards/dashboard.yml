@@ -1,0 +1,14 @@
+# grafana/provisioning/dashboards/dashboard.yml
+# Tells Grafana where to find pre-built dashboard JSON files
+apiVersion: 1
+
+providers:
+  - name: 'fraud-detection'
+    orgId: 1
+    folder: ''
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 30
+    allowUiUpdates: true
+    options:
+      path: /var/lib/grafana/dashboards
