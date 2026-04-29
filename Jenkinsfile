@@ -29,6 +29,9 @@ pipeline {
             steps {
                 echo '🐳 Building Docker image (trains ML model inside)...'
                 sh """
+                    # Inject the dataset into the workspace before building
+                    cp /var/jenkins_home/creditcard.csv ./creditcard.csv
+                    
                     docker build -t ${IMAGE_NAME}:${IMAGE_TAG} .
                     docker tag  ${IMAGE_NAME}:${IMAGE_TAG} ${IMAGE_NAME}:latest
                     echo "✅ Built ${IMAGE_NAME}:${IMAGE_TAG}"
