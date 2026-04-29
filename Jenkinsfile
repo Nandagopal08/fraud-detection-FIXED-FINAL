@@ -98,23 +98,25 @@ pipeline {
             }
         }
 
-        // ── Stage 5: Deploy with Docker Compose ─────────────────────
-        // Paper Section 3.3: "deployment, management, scaling via Docker Swarm/Compose"
-        stage('Deploy with Docker Compose') {
+        // ── Stage 5: Deploy to Kubernetes ───────────────────────────────
+        // Paper Section 3.3: "deployment, management, scaling via Kubernetes"
+        stage('Deploy to Kubernetes') {
             steps {
-                echo '🚀 Deploying stack with Docker Compose...'
+                echo '🚀 Deploying stack to Kubernetes...'
                 sh """
-                    export IMAGE_TAG=${IMAGE_TAG}
-                    export DOCKERHUB_USER=${DOCKERHUB_USER}
+                    # Apply namespace first
+                    kubectl apply -f kubernetes/namespace.yml
 
-                    # Pull latest pushed image
-                    docker pull ${IMAGE_NAME}:${IMAGE_TAG}
+                    # Apply all Kubernetes resources
+                    kubectl apply -f kubernetes/
 
-                    # Rolling update - only restart fraud-api service
-                    # (Prometheus/Grafana/Portainer keep running)
-                    docker compose up -d --no-deps --force-recreate fraud-api
+                    # Update the deployment to use the new image tag
+                    kubectl set image deployment/fraud-api fraud-api=${IMAGE_NAME}:${IMAGE_TAG} -n fraud-detection
+                    
+                    # Wait for rollout
+                    kubectl rollout status deployment/fraud-api -n fraud-detection
 
-                    echo "✅ Deployment triggered"
+                    echo "✅ Deployment triggered on Kubernetes"
                 """
             }
         }
@@ -124,15 +126,15 @@ pipeline {
             steps {
                 echo '🔍 Verifying deployed service...'
                 sh """
-                    # Allow up to 90s for the new container to become healthy
+                    # Allow up to 90s for the new pod to become healthy
                     for i in \$(seq 1 9); do
-                        STATUS=\$(curl -sf http://localhost:5000/health | \\
+                        STATUS=\$(curl -sf http://localhost:30500/health | \\
                             python3 -c "import sys,json; print(json.load(sys.stdin)['status'])" 2>/dev/null || echo "starting")
                         echo "Check \$i/9: \$STATUS"
                         [ "\$STATUS" = "healthy" ] && break
                         sleep 10
                     done
-                    [ "\$STATUS" = "healthy" ] || echo "⚠️  Service still starting — check http://localhost:5000/health manually"
+                    [ "\$STATUS" = "healthy" ] || echo "⚠️  Service still starting — check http://localhost:30500/health manually"
                     echo "Deployed service status: \$STATUS"
                 """
             }
@@ -148,10 +150,9 @@ pipeline {
             echo """
 ✅ PIPELINE SUCCESS
 Image     : ${IMAGE_NAME}:${IMAGE_TAG}
-Dashboard : http://localhost:5000
-Grafana   : http://localhost:3000   (admin/admin)
-Prometheus: http://localhost:9090
-Portainer : http://localhost:9000
+Dashboard : http://localhost:30500 (Kubernetes NodePort)
+Grafana   : http://localhost:30300 (admin/admin) (Kubernetes NodePort)
+Prometheus: http://localhost:30909 (Kubernetes NodePort)
 Jenkins   : http://localhost:8080
 """
         }
