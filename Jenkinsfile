@@ -7,7 +7,7 @@ pipeline {
     agent any
 
     environment {
-        DOCKERHUB_USER = 'ameyab16'                          // ← CHANGE TO YOUR DOCKERHUB USERNAME
+        DOCKERHUB_USER = 'nand08'                          // ← CHANGE TO YOUR DOCKERHUB USERNAME
         IMAGE_NAME     = "${DOCKERHUB_USER}/fraud-api"
         IMAGE_TAG      = "${BUILD_NUMBER}"
         REGISTRY_CREDS = 'dockerhub-credentials'             // Jenkins credential ID
