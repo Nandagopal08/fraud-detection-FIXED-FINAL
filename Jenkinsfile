@@ -45,24 +45,24 @@ pipeline {
             steps {
                 echo '🧪 Running container smoke test...'
                 sh """
-                    # Start a throwaway test container on port 5001
+                    # Start a throwaway test container on the SAME network as Jenkins
                     docker run -d --name test-fraud-api-${BUILD_NUMBER} \\
-                        -p 5001:5000 \\
+                        --network fraud-detection_monitoring \\
                         ${IMAGE_NAME}:${IMAGE_TAG}
 
                     # Model trains during Docker build so 30s is enough at runtime
-                    echo "Waiting 45s for API startup..."
-                    sleep 45
+                    echo "Waiting 30s for API startup..."
+                    sleep 30
 
                     # ── Health check ──────────────────────────────────
-                    HEALTH=\$(curl -sf http://localhost:5001/health | \\
+                    HEALTH=\$(curl -sf http://test-fraud-api-${BUILD_NUMBER}:5000/health | \\
                         python3 -c "import sys,json; print(json.load(sys.stdin).get('status',''))" 2>/dev/null || echo "fail")
                     echo "Health status: \$HEALTH"
                     [ "\$HEALTH" = "healthy" ] || { docker logs test-fraud-api-${BUILD_NUMBER}; docker rm -f test-fraud-api-${BUILD_NUMBER}; exit 1; }
 
                     # ── Predict endpoint (/api/predict) ───────────────
                     # Paper Section 4.3: Prediction outputs results of four ML models
-                    PRED=\$(curl -sf -X POST http://localhost:5001/api/predict \\
+                    PRED=\$(curl -sf -X POST http://test-fraud-api-${BUILD_NUMBER}:5000/api/predict \\
                         -H "Content-Type: application/json" \\
                         -d '{"amount": 150}' | \\
                         python3 -c "import sys,json; print(json.load(sys.stdin).get('success',''))" 2>/dev/null || echo "fail")
@@ -70,7 +70,7 @@ pipeline {
                     [ "\$PRED" = "True" ] || { docker logs test-fraud-api-${BUILD_NUMBER}; docker rm -f test-fraud-api-${BUILD_NUMBER}; exit 1; }
 
                     # ── Metrics endpoint (Prometheus scrape target) ────
-                    METRICS_STATUS=\$(curl -so /dev/null -w "%{http_code}" http://localhost:5001/metrics)
+                    METRICS_STATUS=\$(curl -so /dev/null -w "%{http_code}" http://test-fraud-api-${BUILD_NUMBER}:5000/metrics)
                     echo "Metrics HTTP status: \$METRICS_STATUS"
                     [ "\$METRICS_STATUS" = "200" ] || { echo "❌ /metrics returned \$METRICS_STATUS"; docker rm -f test-fraud-api-${BUILD_NUMBER}; exit 1; }
 
