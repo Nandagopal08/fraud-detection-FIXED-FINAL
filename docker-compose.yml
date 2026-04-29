@@ -1,26 +1,21 @@
-# docker-compose.yml — WINDOWS/WSL2 FIXED VERSION
-# cAdvisor fix: WSL2 does not have /var/lib/docker, /dev/kmsg, or /dev/disk
-# Solution: use named pipe via npipe on Windows Docker Desktop
+version: "3.9"
 
 services:
+
   fraud-api:
-    image: ${DOCKERHUB_USER:-ameyab16}/fraud-api:${IMAGE_TAG:-latest}
+    image: ameyab16/fraud-api:latest
     container_name: fraud-api
     ports:
       - "5000:5000"
     networks:
       - monitoring
     restart: unless-stopped
-    volumes:
-      - fraud-data:/app/data
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5000/health')"]
       interval: 30s
       timeout: 10s
       retries: 5
-      start_period: 90s
-    labels:
-      - "com.docker.stack.namespace=fraud-detection"
+      start_period: 60s
 
   prometheus:
     image: prom/prometheus:v2.51.2
@@ -33,13 +28,8 @@ services:
     networks:
       - monitoring
     restart: unless-stopped
-    command:
-      - '--config.file=/etc/prometheus/prometheus.yml'
-      - '--storage.tsdb.path=/prometheus'
-      - '--web.enable-lifecycle'
     depends_on:
-      fraud-api:
-        condition: service_healthy
+      - fraud-api
 
   grafana:
     image: grafana/grafana:10.4.2
@@ -49,25 +39,14 @@ services:
     environment:
       GF_SECURITY_ADMIN_USER: admin
       GF_SECURITY_ADMIN_PASSWORD: admin
-      GF_USERS_ALLOW_SIGN_UP: "false"
-      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/fraud_dashboard.json
     volumes:
       - grafana-data:/var/lib/grafana
-      - ./grafana/provisioning:/etc/grafana/provisioning:ro
-      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
     networks:
       - monitoring
     restart: unless-stopped
     depends_on:
       - prometheus
 
-  # ── cAdvisor — WINDOWS/WSL2 FIXED ─────────────────────────────
-  # On Windows Docker Desktop + WSL2:
-  #   - /var/lib/docker does NOT exist in WSL2 filesystem
-  #   - /dev/kmsg does NOT exist
-  #   - /dev/disk does NOT exist
-  # Fix: mount only what exists in WSL2, disable all broken collectors,
-  # use --store_container_labels=false to avoid Docker daemon socket errors
   cadvisor:
     image: gcr.io/cadvisor/cadvisor:v0.49.1
     container_name: cadvisor
@@ -77,17 +56,12 @@ services:
       - /:/rootfs:ro
       - /var/run:/var/run:ro
       - /sys:/sys:ro
-      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+      - /dev/disk/:/dev/disk:ro
     networks:
       - monitoring
     restart: unless-stopped
     privileged: true
-    command:
-      - --housekeeping_interval=15s
-      - --docker_only=true
-      - --store_container_labels=false
-      - --disable_metrics=perf_event,referenced_memory,cpu_topology,resctrl,advtcp,hugetlb,memory_numa
-      - --allow_dynamic_housekeeping=true
 
   portainer:
     image: portainer/portainer-ce:2.20.3
@@ -101,11 +75,25 @@ services:
       - monitoring
     restart: unless-stopped
 
+  jenkins:
+    image: jenkins/jenkins:lts
+    container_name: jenkins
+    user: root
+    ports:
+      - "8080:8080"
+      - "50000:50000"
+    volumes:
+      - jenkins_home:/var/jenkins_home
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+      - monitoring
+    restart: unless-stopped
+
 volumes:
   grafana-data:
   prometheus-data:
   portainer-data:
-  fraud-data:
+  jenkins_home:
 
 networks:
   monitoring:

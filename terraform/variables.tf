@@ -1,13 +1,13 @@
 variable "aws_region" {
   description = "AWS region to deploy in (paper uses ap-northeast-2 = Seoul)"
   type        = string
-  default     = "ap-northeast-2"
+  default     = "ap-south-1"
 }
 
 variable "instance_type" {
   description = "EC2 instance type (paper Table 2: T2.medium, 2 vCPU, 4GB RAM)"
   type        = string
-  default     = "t2.medium"
+  default     = "t3.medium"
 }
 
 variable "key_pair_name" {

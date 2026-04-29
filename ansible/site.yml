@@ -121,16 +121,16 @@
     # ── 7. Run Docker Stack ──────────────────────
     - name: Run Docker Compose
       become_user: ec2-user
-      shell: |
-        cd {{ project_dir }}
-        docker compose up -d
+      command: docker compose up -d
+      args:
+        chdir: "{{ project_dir }}"
 
     # ── 8. Run Jenkins via Docker ────────────────
     - name: Run Jenkins container
       become_user: ec2-user
-      shell: |
-        cd {{ project_dir }}
-        docker compose -f jenkins/docker-compose.jenkins.yml up -d
+      command: docker compose -f jenkins/docker-compose.jenkins.yml up -d
+      args:
+        chdir: "{{ project_dir }}"
 
     # ── 9. Show URLs ────────────────────────────
     - name: Print URLs

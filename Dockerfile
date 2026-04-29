@@ -19,10 +19,10 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir --timeout 300 --retries 5 -r requirements.txt
 
 # -------------------------
-# 2. DOWNLOAD DATA (CACHED)
+# 2. COPY CREDITCARD DATA (FROM LOCAL)
 # -------------------------
-RUN mkdir -p data && \
-    wget -O data/creditcard.csv https://storage.googleapis.com/download.tensorflow.org/data/creditcard.csv
+# ✅ FIXED: Copy from local file instead of downloading
+COPY creditcard.csv /app/data/creditcard.csv
 
 # -------------------------
 # 3. COPY CODE (ONLY THIS CHANGES)
